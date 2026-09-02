@@ -2,6 +2,12 @@
 
 `DesktopAlwaysAnimated` is a small native macOS menu-bar app that continuously loops an installed Apple Aerial video in a desktop-level window. It does not modify `WallpaperAgent`, System Settings, or the selected macOS wallpaper.
 
+
+<img width="630" height="469" alt="Screenshot 2026-09-02 at 1 48 52 AM" src="https://github.com/user-attachments/assets/088d38a5-4ab4-4c7c-82c4-a12b1ec152a7" />
+<img width="437" height="532" alt="Screenshot 2026-09-02 at 1 48 48 AM" src="https://github.com/user-attachments/assets/85830501-a24d-43a0-b568-0227b07f38a4" />
+
+
+
 ## Requirements
 
 - macOS with Xcode Command Line Tools or Xcode
