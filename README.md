@@ -20,6 +20,14 @@ The app chooses the most recently downloaded `.mov` from macOS's Aerial cache. T
 build/NativeAerialLooper.app/Contents/MacOS/NativeAerialLooper --video "/path/to/aerial.mov"
 ```
 
+To start it automatically after login, build first, then run:
+
+```sh
+./install-login-item.sh
+```
+
+This installs a user-level launch agent with no restart loop. It launches independently after login, so a missing app or crash cannot block macOS sign-in. Remove it with `./uninstall-login-item.sh`.
+
 Use the app's menu-bar icon to pause/resume playback or quit. Quitting removes its desktop-level video windows immediately.
 
 ## Experimental Space Profiles
