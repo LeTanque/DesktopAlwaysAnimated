@@ -73,11 +73,31 @@ final class AerialWindowController {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let toolbarIconChoices: [(title: String, symbol: String)] = [
+        ("Wallpaper", "rectangle.3.group.fill"),
+        ("Photo", "photo"),
+        ("Mountains", "mountain.2"),
+        ("Play", "play.rectangle.fill"),
+        ("Film", "film"),
+        ("Video", "video"),
+        ("TV", "tv"),
+        ("Sparkles", "sparkles"),
+        ("Sun", "sun.max.fill"),
+        ("Moon", "moon.stars.fill"),
+        ("Cloud", "cloud.sun.fill"),
+        ("Globe", "globe.americas.fill"),
+        ("Leaf", "leaf.fill"),
+        ("Waves", "water.waves"),
+        ("Desktop", "desktopcomputer")
+    ]
+
     private var controllers: [AerialWindowController] = []
     private var statusItem: NSStatusItem!
     private var playbackMenuItem: NSMenuItem!
+    private var toolbarIconMenu: NSMenu!
     private var videos: [URL] = []
     private var profiles: [String: String] = UserDefaults.standard.dictionary(forKey: "spaceProfiles") as? [String: String] ?? [:]
+    private lazy var aerialNames = loadAerialNames()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         videos = availableVideos()
@@ -103,18 +123,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installMenu(videoURL: URL) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "play.rectangle.fill", accessibilityDescription: "Aerial Looper")
+        applyToolbarIcon()
         statusItem.button?.toolTip = "Native Aerial Looper"
         let menu = NSMenu()
         menu.addItem(withTitle: "Native Aerial Looper", action: nil, keyEquivalent: "")
-        let source = menu.addItem(withTitle: videoURL.lastPathComponent, action: nil, keyEquivalent: "")
+        let source = menu.addItem(withTitle: displayName(for: videoURL), action: nil, keyEquivalent: "")
         source.isEnabled = false
         menu.addItem(.separator())
         playbackMenuItem = menu.addItem(withTitle: "Pause", action: #selector(togglePlayback), keyEquivalent: "p")
         playbackMenuItem.target = self
+        installToolbarIconMenu(in: menu)
         let assignMenu = NSMenu()
         for video in videos {
-            let item = assignMenu.addItem(withTitle: video.deletingPathExtension().lastPathComponent, action: #selector(assignVideo), keyEquivalent: "")
+            let item = assignMenu.addItem(withTitle: displayName(for: video), action: #selector(assignVideo), keyEquivalent: "")
             item.target = self
             item.representedObject = video.path
         }
@@ -128,9 +149,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
+    private func installToolbarIconMenu(in menu: NSMenu) {
+        toolbarIconMenu = NSMenu()
+        let selectedSymbol = UserDefaults.standard.string(forKey: "toolbarIconSymbol") ?? "rectangle.3.group.fill"
+        for choice in Self.toolbarIconChoices {
+            guard let image = NSImage(systemSymbolName: choice.symbol, accessibilityDescription: choice.title) else { continue }
+            image.isTemplate = true
+            let item = toolbarIconMenu.addItem(withTitle: choice.title, action: #selector(selectToolbarIcon), keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice.symbol
+            item.image = image
+            item.state = choice.symbol == selectedSymbol ? .on : .off
+        }
+        let toolbarIcons = menu.addItem(withTitle: "Toolbar Icons", action: nil, keyEquivalent: "")
+        toolbarIcons.submenu = toolbarIconMenu
+    }
+
+    private func applyToolbarIcon() {
+        let symbol = UserDefaults.standard.string(forKey: "toolbarIconSymbol") ?? "rectangle.3.group.fill"
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Aerial Looper")
+            ?? NSImage(systemSymbolName: "play.rectangle.fill", accessibilityDescription: "Aerial Looper")
+        image?.isTemplate = true
+        statusItem.button?.image = image
+    }
+
     @objc private func togglePlayback() {
         controllers.forEach { $0.togglePlayback() }
         playbackMenuItem.title = controllers.first?.isPaused == true ? "Resume" : "Pause"
+    }
+
+    @objc private func selectToolbarIcon(_ sender: NSMenuItem) {
+        guard let symbol = sender.representedObject as? String else { return }
+        UserDefaults.standard.set(symbol, forKey: "toolbarIconSymbol")
+        applyToolbarIcon()
+        toolbarIconMenu.items.forEach { item in
+            item.state = (item.representedObject as? String) == symbol ? .on : .off
+        }
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
@@ -184,6 +238,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let right = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 return left > right
             }
+    }
+
+    private func displayName(for video: URL) -> String {
+        let identifier = video.deletingPathExtension().lastPathComponent.uppercased()
+        return aerialNames[identifier] ?? video.deletingPathExtension().lastPathComponent
+    }
+
+    private func loadAerialNames() -> [String: String] {
+        let manifestURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/manifest/entries.json")
+        guard
+            let data = try? Data(contentsOf: manifestURL),
+            let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let assets = manifest["assets"] as? [[String: Any]]
+        else { return [:] }
+
+        return assets.reduce(into: [:]) { names, asset in
+            guard
+                let identifier = asset["id"] as? String,
+                let name = asset["accessibilityLabel"] as? String,
+                !name.isEmpty
+            else { return }
+            names[identifier.uppercased()] = name
+        }
     }
 
     private func showError(_ message: String) {
