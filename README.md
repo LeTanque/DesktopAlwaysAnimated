@@ -1,6 +1,6 @@
 # Desktop Always Animated
 
-`DesktopAlwaysAnimated` is a small native macOS menu-bar app that continuously loops an installed Apple Aerial video in a desktop-level window. It does not modify `WallpaperAgent`, System Settings, or the selected macOS wallpaper.
+`DesktopAlwaysAnimated` is a small native macOS menu-bar app that continuously loops an installed Apple Aerial video, or another compatible `.mov` or `.mp4` video, in a desktop-level window. It does not modify `WallpaperAgent`, System Settings, or the selected macOS wallpaper.
 
 
 <img width="630" height="469" alt="Screenshot 2026-09-02 at 1 48 52 AM" src="https://github.com/user-attachments/assets/088d38a5-4ab4-4c7c-82c4-a12b1ec152a7" />
@@ -20,10 +20,22 @@
 open build/NativeAerialLooper.app
 ```
 
-The app chooses the most recently downloaded `.mov` from macOS's Aerial cache. To select a specific file instead, launch the executable directly:
+The app chooses the most recently downloaded `.mov` or `.mp4` from macOS's Aerial cache. To select a specific file anywhere on disk, launch the executable directly:
 
 ```sh
 build/NativeAerialLooper.app/Contents/MacOS/NativeAerialLooper --video "/path/to/aerial.mov"
+```
+
+MP4 files using codecs supported by macOS, such as H.264 or HEVC, play directly and do not need conversion:
+
+```sh
+build/NativeAerialLooper.app/Contents/MacOS/NativeAerialLooper --video "/path/to/background.mp4"
+```
+
+If a workflow specifically requires a `.mov` container, an MP4 can usually be remuxed without re-encoding or quality loss:
+
+```sh
+ffmpeg -i input.mp4 -map 0 -c copy output.mov
 ```
 
 To start it automatically after login, build first, then run:

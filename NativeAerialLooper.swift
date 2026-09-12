@@ -73,6 +73,8 @@ final class AerialWindowController {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let supportedVideoExtensions: Set<String> = ["mov", "mp4"]
+
     private static let toolbarIconChoices: [(title: String, symbol: String)] = [
         ("Wallpaper", "rectangle.3.group.fill"),
         ("Photo", "photo"),
@@ -102,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         videos = availableVideos()
         guard let videoURL = resolveVideoURL() else {
-            showError("No Aerial video was found. Relaunch with: --video /path/to/file.mov")
+            showError("No Aerial video was found. Relaunch with: --video /path/to/video.mov (or .mp4)")
             NSApp.terminate(nil)
             return
         }
@@ -232,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             options: [.skipsHiddenFiles]
         )) ?? []
         return videos
-            .filter { $0.pathExtension.lowercased() == "mov" }
+            .filter { Self.supportedVideoExtensions.contains($0.pathExtension.lowercased()) }
             .sorted {
                 let left = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 let right = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
