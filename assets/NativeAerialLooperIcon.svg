@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title>Native Aerial Looper icon</title>
+  <defs>
+    <linearGradient id="surface" x1="160" y1="120" x2="860" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#0b1120"/>
+    </linearGradient>
+    <linearGradient id="motion" x1="250" y1="710" x2="770" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#164e63"/>
+      <stop offset=".52" stop-color="#3b82a0"/>
+      <stop offset="1" stop-color="#bfdbef"/>
+    </linearGradient>
+  </defs>
+  <rect x="56" y="56" width="912" height="912" rx="210" fill="url(#surface)"/>
+  <rect x="76" y="76" width="872" height="872" rx="190" fill="none" stroke="#475569" stroke-width="16"/>
+  <rect x="162" y="222" width="700" height="498" rx="80" fill="#0a1220" stroke="#64748b" stroke-width="22"/>
+  <path d="M238 620C372 710 489 718 592 651c88-57 131-148 208-257" fill="none" stroke="#0f3145" stroke-linecap="round" stroke-width="66"/>
+  <path d="M224 577C354 672 480 682 582 614c86-58 137-151 218-254" fill="none" stroke="url(#motion)" stroke-linecap="round" stroke-width="28"/>
+  <path d="M270 484c116-75 235-83 337-31 94 48 139 124 194 199" fill="none" stroke="#36556a" stroke-linecap="round" stroke-width="16"/>
+  <path d="M466 399c-18-11-40 2-40 23v190c0 21 22 34 40 23l164-95c18-10 18-36 0-46z" fill="#e2e8f0" stroke="#f8fafc" stroke-linejoin="round" stroke-width="14"/>
+  <path d="M355 786h314" stroke="#64748b" stroke-linecap="round" stroke-width="30"/>
+  <path d="M450 786l-20 71h164l-20-71" fill="none" stroke="#64748b" stroke-linejoin="round" stroke-width="26"/>
+</svg>

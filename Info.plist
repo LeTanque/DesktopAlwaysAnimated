@@ -8,6 +8,8 @@
   <string>NativeAerialLooper</string>
   <key>CFBundleIdentifier</key>
   <string>local.native-aerial-looper</string>
+  <key>CFBundleIconFile</key>
+  <string>NativeAerialLooperIcon</string>
   <key>CFBundleName</key>
   <string>Native Aerial Looper</string>
   <key>CFBundlePackageType</key>

@@ -4,8 +4,10 @@ set -euo pipefail
 project_dir="${0:A:h}"
 app_dir="$project_dir/build/NativeAerialLooper.app"
 cache_root="${TMPDIR%/}/desktop-always-animated-swift-cache"
+icon_source="$project_dir/assets/NativeAerialLooperIcon.icns"
 
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$cache_root"
+cp "$icon_source" "$app_dir/Contents/Resources/NativeAerialLooperIcon.icns"
 
 CLANG_MODULE_CACHE_PATH="$cache_root" \
 SWIFT_MODULECACHE_PATH="$cache_root" \

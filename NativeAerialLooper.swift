@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import AVKit
 import CoreGraphics
+import UniformTypeIdentifiers
 
 // Undocumented WindowServer calls. They are resolved by macOS today but may
 // disappear in a future release, hence the app's experimental Space Profiles UI.
@@ -44,8 +45,10 @@ final class AerialWindowController {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
+        ) { [weak self] notification in
+            guard let self, !self.isPaused,
+                  let item = notification.object as? AVPlayerItem,
+                  item === self.player.currentItem else { return }
             self.player.seek(to: .zero)
             self.player.play()
         }
@@ -97,45 +100,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var playbackMenuItem: NSMenuItem!
     private var toolbarIconMenu: NSMenu!
+    private var sourceMenuItem: NSMenuItem!
+    private var defaultVideoURL: URL?
+    private var currentVideoURL: URL?
+    private var videoLoadTask: Task<Void, Never>?
+    private var openPanel: NSOpenPanel?
     private var videos: [URL] = []
     private var profiles: [String: String] = UserDefaults.standard.dictionary(forKey: "spaceProfiles") as? [String: String] ?? [:]
     private lazy var aerialNames = loadAerialNames()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         videos = availableVideos()
-        guard let videoURL = resolveVideoURL() else {
-            showError("No Aerial video was found. Relaunch with: --video /path/to/video.mov (or .mp4)")
-            NSApp.terminate(nil)
-            return
-        }
-        guard FileManager.default.isReadableFile(atPath: videoURL.path) else {
-            showError("The selected video is not readable:\n\(videoURL.path)")
-            NSApp.terminate(nil)
-            return
-        }
-        controllers = NSScreen.screens.map {
-            let controller = AerialWindowController(screen: $0, videoURL: videoURL)
-            controller.show()
-            return controller
-        }
-        installMenu(videoURL: videoURL)
+        defaultVideoURL = resolveVideoURL()
+        installMenu()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(spaceDidChange), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         applyProfileForActiveSpace()
     }
 
-    private func installMenu(videoURL: URL) {
+    private func installMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         applyToolbarIcon()
         statusItem.button?.toolTip = "Native Aerial Looper"
         let menu = NSMenu()
         menu.addItem(withTitle: "Native Aerial Looper", action: nil, keyEquivalent: "")
-        let source = menu.addItem(withTitle: displayName(for: videoURL), action: nil, keyEquivalent: "")
-        source.isEnabled = false
+        sourceMenuItem = menu.addItem(withTitle: "No background selected", action: nil, keyEquivalent: "")
+        sourceMenuItem.isEnabled = false
         menu.addItem(.separator())
+        let choose = menu.addItem(withTitle: "Choose Background Video…", action: #selector(chooseBackgroundVideo), keyEquivalent: "o")
+        choose.target = self
         playbackMenuItem = menu.addItem(withTitle: "Pause", action: #selector(togglePlayback), keyEquivalent: "p")
         playbackMenuItem.target = self
+        playbackMenuItem.isEnabled = false
+        menu.autoenablesItems = false
         installToolbarIconMenu(in: menu)
         let assignMenu = NSMenu()
+        let browse = assignMenu.addItem(withTitle: "Choose Video…", action: #selector(chooseDesktopVideo), keyEquivalent: "")
+        browse.target = self
+        if !videos.isEmpty { assignMenu.addItem(.separator()) }
         for video in videos {
             let item = assignMenu.addItem(withTitle: displayName(for: video), action: #selector(assignVideo), keyEquivalent: "")
             item.target = self
@@ -191,16 +192,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() { NSApp.terminate(nil) }
 
+    @objc private func chooseBackgroundVideo() { chooseVideo(forSpace: nil) }
+
+    @objc private func chooseDesktopVideo() { chooseVideo(forSpace: activeSpaceKey()) }
+
+    private func chooseVideo(forSpace space: String?) {
+        if let openPanel {
+            openPanel.makeKeyAndOrderFront(nil)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.title = space == nil ? "Choose Background Video" : "Choose Video for This Desktop"
+        panel.message = "Choose a local video that macOS can play, such as MOV, MP4, or M4V."
+        panel.prompt = "Use Video"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.movie]
+        // Let AVFoundation decide compatibility, including files with unusual extensions.
+        panel.allowsOtherFileTypes = true
+        panel.directoryURL = (currentVideoURL ?? defaultVideoURL)?.deletingLastPathComponent()
+        openPanel = panel
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard let self else { return }
+            self.openPanel = nil
+            guard response == .OK, let url = panel.url else { return }
+            self.selectVideo(url, forSpace: space)
+        }
+    }
+
+    private func selectVideo(_ url: URL, forSpace space: String?) {
+        let selectedSpace = activeSpaceKey()
+        loadVideo(url) { [weak self] in
+            guard let self else { return }
+            if let space {
+                self.profiles[space] = url.path
+            } else {
+                self.defaultVideoURL = url
+                UserDefaults.standard.set(url.path, forKey: "selectedVideoPath")
+                // A new default should be visible immediately on the Desktop where it was chosen.
+                self.profiles.removeValue(forKey: selectedSpace)
+            }
+            UserDefaults.standard.set(self.profiles, forKey: "spaceProfiles")
+            self.applyProfileForActiveSpace()
+        }
+    }
+
     @objc private func assignVideo(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
-        profiles[activeSpaceKey()] = path
-        UserDefaults.standard.set(profiles, forKey: "spaceProfiles")
-        applyProfileForActiveSpace()
+        selectVideo(URL(fileURLWithPath: path), forSpace: activeSpaceKey())
     }
 
     @objc private func clearAssignment() {
         profiles.removeValue(forKey: activeSpaceKey())
         UserDefaults.standard.set(profiles, forKey: "spaceProfiles")
+        applyProfileForActiveSpace()
     }
 
     @objc private func spaceDidChange() { applyProfileForActiveSpace() }
@@ -208,15 +255,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func activeSpaceKey() -> String { String(CGSGetActiveSpace(CGSMainConnectionID())) }
 
     private func applyProfileForActiveSpace() {
-        guard let path = profiles[activeSpaceKey()], FileManager.default.isReadableFile(atPath: path) else { return }
-        let url = URL(fileURLWithPath: path)
-        controllers.forEach { $0.setVideo(url) }
+        let profileURL = profiles[activeSpaceKey()].map { URL(fileURLWithPath: $0) }
+        guard let url = profileURL ?? defaultVideoURL else {
+            chooseBackgroundVideo()
+            return
+        }
+        loadVideo(url, onFailure: { [weak self] in
+            guard let self else { return }
+            if profileURL != nil, let fallback = self.defaultVideoURL, fallback != url {
+                self.loadVideo(fallback) { self.showVideo(fallback) }
+            } else if self.controllers.isEmpty {
+                self.chooseBackgroundVideo()
+            }
+        }) { [weak self] in self?.showVideo(url) }
+    }
+
+    private func loadVideo(_ url: URL, onFailure: (() -> Void)? = nil, onSuccess: @escaping () -> Void) {
+        videoLoadTask?.cancel()
+        videoLoadTask = Task { @MainActor [weak self] in
+            do {
+                guard FileManager.default.isReadableFile(atPath: url.path),
+                      (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true else {
+                    throw VideoSelectionError.unreadable
+                }
+                let asset = AVURLAsset(url: url)
+                let playable = try await asset.load(.isPlayable)
+                let tracks = try await asset.loadTracks(withMediaType: .video)
+                guard playable, !tracks.isEmpty else { throw VideoSelectionError.unsupported }
+                guard !Task.isCancelled else { return }
+                onSuccess()
+            } catch {
+                guard !Task.isCancelled, let self else { return }
+                self.showError("Cannot use “\(url.lastPathComponent)” as a background.\n\nChoose a readable video with a video track and a codec supported by macOS.\n\n\(error.localizedDescription)")
+                if let onFailure {
+                    onFailure()
+                } else if self.controllers.isEmpty {
+                    self.chooseBackgroundVideo()
+                }
+            }
+        }
+    }
+
+    private func showVideo(_ url: URL) {
+        if controllers.isEmpty {
+            controllers = NSScreen.screens.map {
+                let controller = AerialWindowController(screen: $0, videoURL: url)
+                controller.show()
+                return controller
+            }
+        } else if currentVideoURL != url {
+            controllers.forEach { $0.setVideo(url) }
+        }
+        currentVideoURL = url
+        sourceMenuItem.title = displayName(for: url)
+        sourceMenuItem.toolTip = url.path
+        playbackMenuItem.isEnabled = true
     }
 
     private func resolveVideoURL() -> URL? {
         let args = CommandLine.arguments
         if let index = args.firstIndex(of: "--video"), args.indices.contains(index + 1) {
             return URL(fileURLWithPath: args[index + 1])
+        }
+        if let path = UserDefaults.standard.string(forKey: "selectedVideoPath") {
+            return URL(fileURLWithPath: path)
         }
         // macOS stores downloaded Aerials under the user's wallpaper cache.
         // The logical URL in com.apple.wallpaper can refer to an asset that isn't
@@ -270,7 +372,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Native Aerial Looper"
         alert.informativeText = message
+        NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
+    }
+}
+
+private enum VideoSelectionError: LocalizedError {
+    case unreadable
+    case unsupported
+
+    var errorDescription: String? {
+        switch self {
+        case .unreadable: return "The file is missing, inaccessible, or is not a regular file."
+        case .unsupported: return "This file does not contain video that macOS can play."
+        }
     }
 }
 
