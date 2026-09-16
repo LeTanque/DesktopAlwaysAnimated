@@ -70,6 +70,11 @@ final class AerialWindowController {
         if !isPaused { player.play() }
     }
 
+    func close() {
+        player.pause()
+        window.orderOut(nil)
+    }
+
     deinit {
         if let loopObserver { NotificationCenter.default.removeObserver(loopObserver) }
     }
@@ -105,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentVideoURL: URL?
     private var videoLoadTask: Task<Void, Never>?
     private var openPanel: NSOpenPanel?
+    private var assignMenu: NSMenu!
     private var videos: [URL] = []
     private var profiles: [String: String] = UserDefaults.standard.dictionary(forKey: "spaceProfiles") as? [String: String] ?? [:]
     private lazy var aerialNames = loadAerialNames()
@@ -128,20 +134,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let choose = menu.addItem(withTitle: "Choose Background Video…", action: #selector(chooseBackgroundVideo), keyEquivalent: "o")
         choose.target = self
+        let restart = menu.addItem(withTitle: "Restart Video Wallpaper", action: #selector(restartVideoWallpaper), keyEquivalent: "r")
+        restart.target = self
         playbackMenuItem = menu.addItem(withTitle: "Pause", action: #selector(togglePlayback), keyEquivalent: "p")
         playbackMenuItem.target = self
         playbackMenuItem.isEnabled = false
         menu.autoenablesItems = false
         installToolbarIconMenu(in: menu)
-        let assignMenu = NSMenu()
-        let browse = assignMenu.addItem(withTitle: "Choose Video…", action: #selector(chooseDesktopVideo), keyEquivalent: "")
-        browse.target = self
-        if !videos.isEmpty { assignMenu.addItem(.separator()) }
-        for video in videos {
-            let item = assignMenu.addItem(withTitle: displayName(for: video), action: #selector(assignVideo), keyEquivalent: "")
-            item.target = self
-            item.representedObject = video.path
-        }
+        assignMenu = NSMenu()
+        refreshAssignMenu()
         let assign = menu.addItem(withTitle: "Assign Video to This Desktop", action: nil, keyEquivalent: "")
         assign.submenu = assignMenu
         let clear = menu.addItem(withTitle: "Clear This Desktop Assignment", action: #selector(clearAssignment), keyEquivalent: "")
@@ -179,6 +180,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func togglePlayback() {
         controllers.forEach { $0.togglePlayback() }
         playbackMenuItem.title = controllers.first?.isPaused == true ? "Resume" : "Pause"
+    }
+
+    @objc private func restartVideoWallpaper() {
+        videoLoadTask?.cancel()
+        controllers.forEach { $0.close() }
+        controllers.removeAll()
+        currentVideoURL = nil
+        applyProfileForActiveSpace()
     }
 
     @objc private func selectToolbarIcon(_ sender: NSMenuItem) {
@@ -226,11 +235,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let selectedSpace = activeSpaceKey()
         loadVideo(url) { [weak self] in
             guard let self else { return }
+            guard let managedURL = try? self.linkVideo(url) else {
+                self.showError("Native Aerial Looper could not create a managed link for “\(url.lastPathComponent)”.\n\nCheck that the file is still available and that the app can write to its Application Support folder.")
+                return
+            }
+            self.videos = self.availableVideos()
+            self.refreshAssignMenu()
             if let space {
-                self.profiles[space] = url.path
+                self.profiles[space] = managedURL.path
             } else {
-                self.defaultVideoURL = url
-                UserDefaults.standard.set(url.path, forKey: "selectedVideoPath")
+                self.defaultVideoURL = managedURL
+                UserDefaults.standard.set(managedURL.path, forKey: "selectedVideoPath")
                 // A new default should be visible immediately on the Desktop where it was chosen.
                 self.profiles.removeValue(forKey: selectedSpace)
             }
@@ -274,8 +289,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         videoLoadTask?.cancel()
         videoLoadTask = Task { @MainActor [weak self] in
             do {
-                guard FileManager.default.isReadableFile(atPath: url.path),
-                      (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true else {
+                let resolvedURL = url.resolvingSymlinksInPath()
+                guard FileManager.default.isReadableFile(atPath: resolvedURL.path),
+                      (try resolvedURL.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true else {
                     throw VideoSelectionError.unreadable
                 }
                 let asset = AVURLAsset(url: url)
@@ -312,6 +328,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         playbackMenuItem.isEnabled = true
     }
 
+    private func refreshAssignMenu() {
+        guard let assignMenu else { return }
+        assignMenu.removeAllItems()
+        let browse = assignMenu.addItem(withTitle: "Choose Video…", action: #selector(chooseDesktopVideo), keyEquivalent: "")
+        browse.target = self
+        if !videos.isEmpty { assignMenu.addItem(.separator()) }
+        for video in videos {
+            let item = assignMenu.addItem(withTitle: displayName(for: video), action: #selector(assignVideo), keyEquivalent: "")
+            item.target = self
+            item.representedObject = video.path
+        }
+    }
+
+    private func managedVideoDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Native Aerial Looper/Videos", isDirectory: true)
+    }
+
+    private func linkVideo(_ url: URL) throws -> URL {
+        let directory = managedVideoDirectory()
+        let source = url.standardizedFileURL
+        let managedPrefix = directory.standardizedFileURL.path + "/"
+        if source.path.hasPrefix(managedPrefix) { return source }
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let baseName = url.deletingPathExtension().lastPathComponent
+        let extensionName = url.pathExtension
+        var suffix = 1
+        var candidate: URL
+        repeat {
+            let name = suffix == 1 ? baseName : "\(baseName) (\(suffix))"
+            candidate = directory.appendingPathComponent(name)
+            if !extensionName.isEmpty { candidate.appendPathExtension(extensionName) }
+            if let existingDestination = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate.path),
+               URL(fileURLWithPath: existingDestination).standardizedFileURL == source {
+                return candidate
+            }
+            suffix += 1
+        } while FileManager.default.fileExists(atPath: candidate.path)
+
+        try FileManager.default.createSymbolicLink(at: candidate, withDestinationURL: source)
+        return candidate
+    }
+
     private func resolveVideoURL() -> URL? {
         let args = CommandLine.arguments
         if let index = args.firstIndex(of: "--video"), args.indices.contains(index + 1) {
@@ -330,13 +390,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func availableVideos() -> [URL] {
         let cacheDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/videos")
-        let videos = (try? FileManager.default.contentsOfDirectory(
-            at: cacheDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []
+        let managedDirectory = managedVideoDirectory()
+        let directories = [cacheDirectory, managedDirectory]
+        let videos = directories.flatMap { directory in
+            (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        }
+        var seen = Set<String>()
         return videos
-            .filter { Self.supportedVideoExtensions.contains($0.pathExtension.lowercased()) }
+            .filter { video in
+                let isManaged = video.deletingLastPathComponent().standardizedFileURL == managedDirectory.standardizedFileURL
+                return isManaged || Self.supportedVideoExtensions.contains(video.pathExtension.lowercased())
+            }
+            .filter { seen.insert($0.standardizedFileURL.path).inserted }
             .sorted {
                 let left = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 let right = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast

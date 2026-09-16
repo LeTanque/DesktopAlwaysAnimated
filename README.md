@@ -36,7 +36,7 @@ build/NativeAerialLooper.app/Contents/MacOS/NativeAerialLooper --video "$(pwd)/s
 
 Open the menu-bar icon and choose **Choose Background Video…** to browse anywhere on your Mac, including external drives. Select a compatible video and click **Use Video**. The app checks that it contains playable video before switching, and remembers your selection across launches. Cancelling or selecting an invalid file leaves the current background unchanged.
 
-MOV, MP4, and M4V are common choices; actual compatibility depends on the video's codec and macOS. Animated GIFs, web pages, and animation project files must be exported to a compatible video first. Files play from their original location, so keep the selected file available.
+MOV, MP4, and M4V are common choices; actual compatibility depends on the video's codec and macOS. Animated GIFs, web pages, and animation project files must be exported to a compatible video first. A selected file is represented by a symbolic link in `~/Library/Application Support/Native Aerial Looper/Videos`, so it also appears in the Desktop assignment menu without duplicating the media. Keep the original file available while using the link.
 
 On first launch, the app uses the newest cached Aerial if available, otherwise it opens the file picker. If a saved file becomes unavailable, the app lets you choose a replacement. To override the saved default for one launch, use:
 
@@ -70,7 +70,7 @@ Use the app's menu-bar icon to pause/resume playback or quit. Quitting removes i
 
 Choose **Assign Video to This Desktop** from the menu bar while on any macOS Desktop. The assignment is remembered and applied when you switch Spaces. The feature uses an undocumented macOS WindowServer identifier, so it may need adjustment after future macOS updates.
 
-Use **Choose Video…** in that submenu to assign a file from anywhere on disk, or select a cached Aerial. **Clear This Desktop Assignment** restores the default background. **Choose Background Video…** sets the default and clears the current Desktop's assignment so the new choice appears immediately; other Desktop assignments remain in place.
+Use **Choose Video…** in that submenu to assign a file from anywhere on disk, or select a cached Aerial. Manually selected files are linked into the same list and remain available there after relaunch. **Clear This Desktop Assignment** restores the default background. **Choose Background Video…** sets the default and clears the current Desktop's assignment so the new choice appears immediately; other Desktop assignments remain in place.
 
 ## Notes
 
