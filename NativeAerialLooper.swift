@@ -81,7 +81,8 @@ final class AerialWindowController {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private static let supportedVideoExtensions: Set<String> = ["mov", "mp4"]
+    private static let supportedVideoExtensions: Set<String> = ["mov", "mp4", "m4v"]
+    private static let preferredVideoExtensionOrder = ["mp4", "mov", "m4v"]
 
     private static let toolbarIconChoices: [(title: String, symbol: String)] = [
         ("Wallpaper", "rectangle.3.group.fill"),
@@ -114,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var videos: [URL] = []
     private var profiles: [String: String] = UserDefaults.standard.dictionary(forKey: "spaceProfiles") as? [String: String] ?? [:]
     private lazy var aerialNames = loadAerialNames()
+    private lazy var bundledWallpaperNames = loadBundledWallpaperNames()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         videos = availableVideos()
@@ -346,6 +348,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .appendingPathComponent("Library/Application Support/Native Aerial Looper/Videos", isDirectory: true)
     }
 
+    private func bundledVideoDirectory() -> URL? {
+        guard let directory = Bundle.main.resourceURL?.appendingPathComponent("DefaultWallpapers", isDirectory: true),
+              FileManager.default.fileExists(atPath: directory.path)
+        else { return nil }
+        return directory
+    }
+
     private func linkVideo(_ url: URL) throws -> URL {
         let directory = managedVideoDirectory()
         let source = url.standardizedFileURL
@@ -384,14 +393,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The logical URL in com.apple.wallpaper can refer to an asset that isn't
         // directly present in /System/Library, so choose the most recently
         // downloaded local Aerial when no explicit --video path was supplied.
-        return availableVideos().first
+        let videos = availableVideos()
+        return videos.first(where: { !isBundledVideo($0) }) ?? videos.first
     }
 
     private func availableVideos() -> [URL] {
         let cacheDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/videos")
         let managedDirectory = managedVideoDirectory()
-        let directories = [cacheDirectory, managedDirectory]
+        let bundledDirectory = bundledVideoDirectory()
+        var directories = [cacheDirectory, managedDirectory]
+        if let bundledDirectory { directories.append(bundledDirectory) }
         let videos = directories.flatMap { directory in
             (try? FileManager.default.contentsOfDirectory(
                 at: directory,
@@ -402,20 +414,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var seen = Set<String>()
         return videos
             .filter { video in
-                let isManaged = video.deletingLastPathComponent().standardizedFileURL == managedDirectory.standardizedFileURL
-                return isManaged || Self.supportedVideoExtensions.contains(video.pathExtension.lowercased())
+                guard Self.supportedVideoExtensions.contains(video.pathExtension.lowercased()) else { return false }
+                let parent = video.deletingLastPathComponent().standardizedFileURL
+                if parent == managedDirectory.standardizedFileURL { return true }
+                if let bundledDirectory, parent == bundledDirectory.standardizedFileURL { return true }
+                return parent == cacheDirectory.standardizedFileURL
             }
             .filter { seen.insert($0.standardizedFileURL.path).inserted }
-            .sorted {
-                let left = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                let right = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                return left > right
+            .filter(dedupedBundledVideos)
+            .sorted { left, right in
+                let leftBundled = isBundledVideo(left)
+                let rightBundled = isBundledVideo(right)
+                if leftBundled != rightBundled { return leftBundled }
+                if leftBundled {
+                    return displayName(for: left).localizedCaseInsensitiveCompare(displayName(for: right)) == .orderedAscending
+                }
+                let leftDate = (try? left.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let rightDate = (try? right.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return leftDate > rightDate
             }
     }
 
+    private func isBundledVideo(_ video: URL) -> Bool {
+        guard let bundledDirectory = bundledVideoDirectory() else { return false }
+        return video.deletingLastPathComponent().standardizedFileURL == bundledDirectory.standardizedFileURL
+    }
+
+    private func dedupedBundledVideos(_ video: URL) -> Bool {
+        guard isBundledVideo(video), let bundledDirectory = bundledVideoDirectory() else { return true }
+        let stem = video.deletingPathExtension().lastPathComponent
+        let siblings = (try? FileManager.default.contentsOfDirectory(
+            at: bundledDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ))?.filter {
+            $0.deletingPathExtension().lastPathComponent == stem
+                && Self.supportedVideoExtensions.contains($0.pathExtension.lowercased())
+        } ?? [video]
+        guard let preferred = siblings.min(by: preferredVideoExtensionRank) else { return true }
+        return video.standardizedFileURL == preferred.standardizedFileURL
+    }
+
+    private func preferredVideoExtensionRank(_ left: URL, _ right: URL) -> Bool {
+        let leftRank = Self.preferredVideoExtensionOrder.firstIndex(of: left.pathExtension.lowercased()) ?? Int.max
+        let rightRank = Self.preferredVideoExtensionOrder.firstIndex(of: right.pathExtension.lowercased()) ?? Int.max
+        if leftRank != rightRank { return leftRank < rightRank }
+        return left.lastPathComponent.localizedCaseInsensitiveCompare(right.lastPathComponent) == .orderedAscending
+    }
+
     private func displayName(for video: URL) -> String {
-        let identifier = video.deletingPathExtension().lastPathComponent.uppercased()
-        return aerialNames[identifier] ?? video.deletingPathExtension().lastPathComponent
+        let stem = video.deletingPathExtension().lastPathComponent
+        if let bundledName = bundledWallpaperNames[stem] { return bundledName }
+        let identifier = stem.uppercased()
+        return aerialNames[identifier] ?? stem
+    }
+
+    private func loadBundledWallpaperNames() -> [String: String] {
+        guard let manifestURL = bundledVideoDirectory()?.appendingPathComponent("wallpaper-names.json"),
+              let data = try? Data(contentsOf: manifestURL),
+              let names = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return [:] }
+        return names
     }
 
     private func loadAerialNames() -> [String: String] {
