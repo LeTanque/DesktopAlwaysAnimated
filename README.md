@@ -21,14 +21,14 @@ The app uses its original vector icon from [`assets/NativeAerialLooperIcon.svg`]
 open build/NativeAerialLooper.app
 ```
 
-## Included sample backgrounds
+## Included default wallpapers
 
-The [`samples`](samples) folder contains two original ten-second motion loops that are ready to use:
+The [`samples`](samples) folder holds the default motion loops shipped inside every build. `build.sh` copies them into the app bundle as `DefaultWallpapers`, so they appear in **Assign Video to This Desktop** on a fresh install without downloading Apple Aerials or picking a file first. Friendly menu titles come from [`samples/wallpaper-names.json`](samples/wallpaper-names.json).
 
 - [`sample-motion.mp4`](samples/sample-motion.mp4) — H.264 in an MP4 container
 - [`sample-motion.mov`](samples/sample-motion.mov) — H.264 in a MOV container
 
-Choose either file from **Choose Background Video…**, or launch one directly:
+Add more `.mov`, `.mp4`, or `.m4v` files to `samples/` before building to ship additional defaults. Choose any bundled wallpaper from the assignment submenu, from **Choose Background Video…**, or launch one directly:
 
 ```sh
 build/NativeAerialLooper.app/Contents/MacOS/NativeAerialLooper --video "$(pwd)/samples/sample-motion.mp4"
@@ -38,7 +38,7 @@ Open the menu-bar icon and choose **Choose Background Video…** to browse anywh
 
 MOV, MP4, and M4V are common choices; actual compatibility depends on the video's codec and macOS. Animated GIFs, web pages, and animation project files must be exported to a compatible video first. A selected file is represented by a symbolic link in `~/Library/Application Support/Native Aerial Looper/Videos`, so it also appears in the Desktop assignment menu without duplicating the media. Keep the original file available while using the link.
 
-On first launch, the app uses the newest cached Aerial if available, otherwise it opens the file picker. If a saved file becomes unavailable, the app lets you choose a replacement. To override the saved default for one launch, use:
+On first launch, the app uses the newest cached Aerial if available, otherwise the first bundled default wallpaper, otherwise it opens the file picker. If a saved file becomes unavailable, the app lets you choose a replacement. To override the saved default for one launch, use:
 
 ```sh
 build/NativeAerialLooper.app/Contents/MacOS/NativeAerialLooper --video "/path/to/aerial.mov"
