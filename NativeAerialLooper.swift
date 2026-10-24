@@ -205,8 +205,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func chooseBackgroundVideo() { chooseVideo(forSpace: nil) }
 
-    @objc private func chooseDesktopVideo() { chooseVideo(forSpace: activeSpaceKey()) }
-
     private func chooseVideo(forSpace space: String?) {
         if let openPanel {
             openPanel.makeKeyAndOrderFront(nil)
@@ -333,9 +331,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshAssignMenu() {
         guard let assignMenu else { return }
         assignMenu.removeAllItems()
-        let browse = assignMenu.addItem(withTitle: "Choose Video…", action: #selector(chooseDesktopVideo), keyEquivalent: "")
-        browse.target = self
-        if !videos.isEmpty { assignMenu.addItem(.separator()) }
         for video in videos {
             let item = assignMenu.addItem(withTitle: displayName(for: video), action: #selector(assignVideo), keyEquivalent: "")
             item.target = self
