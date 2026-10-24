@@ -23,19 +23,19 @@ open build/NativeAerialLooper.app
 
 ## Included default wallpapers
 
-The [`samples`](samples) folder holds the default motion loops shipped inside every build. `build.sh` copies them into the app bundle as `DefaultWallpapers`, so they appear in **Assign Video to This Desktop** on a fresh install without downloading Apple Aerials or picking a file first. Friendly menu titles come from [`samples/wallpaper-names.json`](samples/wallpaper-names.json).
+The [`samples`](samples) folder holds the default motion loops shipped inside every build. `build.sh` copies them into the app bundle as `DefaultWallpapers`, so they appear in the video picker on a fresh install without downloading Apple Aerials or picking a file first. Friendly menu titles come from [`samples/wallpaper-names.json`](samples/wallpaper-names.json).
 
 The videos in `samples/` are stored with [Git LFS](https://git-lfs.com). Install it once before cloning or building (`brew install git-lfs && git lfs install`), otherwise the files are tiny pointer text files and will not play.
 
-Add more `.mov`, `.mp4`, or `.m4v` files to `samples/` before building to ship additional defaults. Choose any bundled wallpaper from the assignment submenu, from **Choose Video for All Desktops…**, or launch one directly:
+Add more `.mov`, `.mp4`, or `.m4v` files to `samples/` before building to ship additional defaults. Choose any bundled wallpaper from the video picker, or launch one directly:
 
 ```sh
 build/NativeAerialLooper.app/Contents/MacOS/NativeAerialLooper --video "$(pwd)/samples/sample-motion.mp4"
 ```
 
-Open the menu-bar icon and choose **Choose Video for All Desktops…** to browse anywhere on your Mac, including external drives. Select a compatible video and click **Use Video**. The app checks that it contains playable video before switching, and remembers your selection across launches. Cancelling or selecting an invalid file leaves the current background unchanged.
+Open the menu-bar icon and choose **Choose Video for All Desktops…**, then click **BROWSE…** in the picker to find a video anywhere on your Mac, including external drives. Select a compatible video and click **Use Video**. The app checks that it contains playable video before switching, and remembers your selection across launches. Cancelling or selecting an invalid file leaves the current background unchanged.
 
-MOV, MP4, and M4V are common choices; actual compatibility depends on the video's codec and macOS. Animated GIFs, web pages, and animation project files must be exported to a compatible video first. A selected file is represented by a symbolic link in `~/Library/Application Support/Native Aerial Looper/Videos`, so it also appears in the Desktop assignment menu without duplicating the media. Keep the original file available while using the link.
+MOV, MP4, and M4V are common choices; actual compatibility depends on the video's codec and macOS. Animated GIFs, web pages, and animation project files must be exported to a compatible video first. A selected file is represented by a symbolic link in `~/Library/Application Support/Native Aerial Looper/Videos`, so it also appears in the picker's **Your Videos** section without duplicating the media. Keep the original file available while using the link.
 
 On first launch, the app uses the newest cached Aerial if available, otherwise the first bundled default wallpaper, otherwise it opens the file picker. If a saved file becomes unavailable, the app lets you choose a replacement. To override the saved default for one launch, use:
 
@@ -67,9 +67,9 @@ Use the app's menu-bar icon to pause/resume playback or quit. Quitting removes i
 
 ## Experimental Space Profiles
 
-Choose **Assign Video to This Desktop** from the menu bar while on any macOS Desktop. The assignment is remembered and applied when you switch Spaces. The feature uses an undocumented macOS WindowServer identifier, so it may need adjustment after future macOS updates.
+Choose **Choose Video for This Desktop…** from the menu bar while on any macOS Desktop. The assignment is remembered and applied when you switch Spaces. The feature uses an undocumented macOS WindowServer identifier, so it may need adjustment after future macOS updates.
 
-The menu has two ways to choose a file from anywhere on disk. **Choose Video for This Desktop…** assigns it to the current Desktop only. **Choose Video for All Desktops…** sets the default background and clears every Desktop's own assignment, so the new video plays on all of them. Either way the file is linked into the assignment list and remains available there after relaunch, as do bundled wallpapers and cached Aerials. **Clear This Desktop Assignment** restores the default background.
+The menu has two ways to open the video picker, a translucent window showing a thumbnail for every bundled wallpaper, cached Aerial, and video you added before; click a tile to use it, or **BROWSE…** to pick any other file on disk. **Choose Video for This Desktop…** assigns it to the current Desktop only. **Choose Video for All Desktops…** sets the default background and clears every Desktop's own assignment, so the new video plays on all of them. Files you browse for are linked into the picker's **Your Videos** section and remain available there after relaunch. **Clear This Desktop Assignment** restores the default background.
 
 ## Notes
 

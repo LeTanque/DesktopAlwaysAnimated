@@ -113,7 +113,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var videoLoadTask: Task<Void, Never>?
     private var openPanel: NSOpenPanel?
     private var pickerPanel: VideoPickerPanel?
-    private var assignMenu: NSMenu!
     private var videos: [URL] = []
     private var profiles: [String: String] = UserDefaults.standard.dictionary(forKey: "spaceProfiles") as? [String: String] ?? [:]
     private lazy var aerialNames = loadAerialNames()
@@ -147,10 +146,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         playbackMenuItem.isEnabled = false
         menu.autoenablesItems = false
         installToolbarIconMenu(in: menu)
-        assignMenu = NSMenu()
-        refreshAssignMenu()
-        let assign = menu.addItem(withTitle: "Assign Video to This Desktop", action: nil, keyEquivalent: "")
-        assign.submenu = assignMenu
         let clear = menu.addItem(withTitle: "Clear This Desktop Assignment", action: #selector(clearAssignment), keyEquivalent: "")
         clear.target = self
         menu.addItem(.separator())
@@ -302,7 +297,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             self.videos = self.availableVideos()
-            self.refreshAssignMenu()
             if let space {
                 self.profiles[space] = managedURL.path
             } else {
@@ -315,11 +309,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(self.profiles, forKey: "spaceProfiles")
             self.applyProfileForActiveSpace()
         }
-    }
-
-    @objc private func assignVideo(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
-        selectVideo(URL(fileURLWithPath: path), forSpace: activeSpaceKey())
     }
 
     @objc private func clearAssignment() {
@@ -389,16 +378,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sourceMenuItem.title = displayName(for: url)
         sourceMenuItem.toolTip = url.path
         playbackMenuItem.isEnabled = true
-    }
-
-    private func refreshAssignMenu() {
-        guard let assignMenu else { return }
-        assignMenu.removeAllItems()
-        for video in videos {
-            let item = assignMenu.addItem(withTitle: displayName(for: video), action: #selector(assignVideo), keyEquivalent: "")
-            item.target = self
-            item.representedObject = video.path
-        }
     }
 
     private func managedVideoDirectory() -> URL {
