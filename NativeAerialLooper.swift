@@ -295,7 +295,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func selectVideo(_ url: URL, forSpace space: String?) {
-        let selectedSpace = activeSpaceKey()
         loadVideo(url) { [weak self] in
             guard let self else { return }
             guard let managedURL = try? self.linkVideo(url) else {
@@ -309,8 +308,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 self.defaultVideoURL = managedURL
                 UserDefaults.standard.set(managedURL.path, forKey: "selectedVideoPath")
-                // A new default should be visible immediately on the Desktop where it was chosen.
-                self.profiles.removeValue(forKey: selectedSpace)
+                // "All Desktops" means all of them: drop every per-Desktop assignment so the new
+                // default shows everywhere, including Desktops that had their own video.
+                self.profiles.removeAll()
             }
             UserDefaults.standard.set(self.profiles, forKey: "spaceProfiles")
             self.applyProfileForActiveSpace()

@@ -69,7 +69,7 @@ Use the app's menu-bar icon to pause/resume playback or quit. Quitting removes i
 
 Choose **Assign Video to This Desktop** from the menu bar while on any macOS Desktop. The assignment is remembered and applied when you switch Spaces. The feature uses an undocumented macOS WindowServer identifier, so it may need adjustment after future macOS updates.
 
-The menu has two ways to choose a file from anywhere on disk. **Choose Video for This Desktop…** assigns it to the current Desktop only. **Choose Video for All Desktops…** sets the default background, clears the current Desktop's assignment so the new choice appears immediately, and leaves other Desktop assignments in place. Either way the file is linked into the assignment list and remains available there after relaunch, as do bundled wallpapers and cached Aerials. **Clear This Desktop Assignment** restores the default background.
+The menu has two ways to choose a file from anywhere on disk. **Choose Video for This Desktop…** assigns it to the current Desktop only. **Choose Video for All Desktops…** sets the default background and clears every Desktop's own assignment, so the new video plays on all of them. Either way the file is linked into the assignment list and remains available there after relaunch, as do bundled wallpapers and cached Aerials. **Clear This Desktop Assignment** restores the default background.
 
 ## Notes
 
