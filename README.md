@@ -25,8 +25,7 @@ open build/NativeAerialLooper.app
 
 The [`samples`](samples) folder holds the default motion loops shipped inside every build. `build.sh` copies them into the app bundle as `DefaultWallpapers`, so they appear in **Assign Video to This Desktop** on a fresh install without downloading Apple Aerials or picking a file first. Friendly menu titles come from [`samples/wallpaper-names.json`](samples/wallpaper-names.json).
 
-- [`sample-motion.mp4`](samples/sample-motion.mp4) — H.264 in an MP4 container
-- [`sample-motion.mov`](samples/sample-motion.mov) — H.264 in a MOV container
+The videos in `samples/` are stored with [Git LFS](https://git-lfs.com). Install it once before cloning or building (`brew install git-lfs && git lfs install`), otherwise the files are tiny pointer text files and will not play.
 
 Add more `.mov`, `.mp4`, or `.m4v` files to `samples/` before building to ship additional defaults. Choose any bundled wallpaper from the assignment submenu, from **Choose Background Video…**, or launch one directly:
 

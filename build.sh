@@ -12,6 +12,7 @@ cp "$icon_source" "$app_dir/Contents/Resources/NativeAerialLooperIcon.icns"
 default_wallpapers_src="$project_dir/samples"
 default_wallpapers_dst="$app_dir/Contents/Resources/DefaultWallpapers"
 if [[ -d "$default_wallpapers_src" ]]; then
+  rm -rf "$default_wallpapers_dst"
   mkdir -p "$default_wallpapers_dst"
   for video in "$default_wallpapers_src"/*.(mov|mp4|m4v)(N); do
     cp "$video" "$default_wallpapers_dst/"
