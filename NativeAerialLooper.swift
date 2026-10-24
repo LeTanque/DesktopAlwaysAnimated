@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import AVKit
 import CoreGraphics
+import SwiftUI
 import UniformTypeIdentifiers
 
 // Undocumented WindowServer calls. They are resolved by macOS today but may
@@ -111,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentVideoURL: URL?
     private var videoLoadTask: Task<Void, Never>?
     private var openPanel: NSOpenPanel?
+    private var pickerPanel: VideoPickerPanel?
     private var assignMenu: NSMenu!
     private var videos: [URL] = []
     private var profiles: [String: String] = UserDefaults.standard.dictionary(forKey: "spaceProfiles") as? [String: String] ?? [:]
@@ -205,9 +207,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() { NSApp.terminate(nil) }
 
-    @objc private func chooseBackgroundVideo() { chooseVideo(forSpace: nil) }
+    @objc private func chooseBackgroundVideo() { showPicker(forSpace: nil) }
 
-    @objc private func chooseDesktopVideo() { chooseVideo(forSpace: activeSpaceKey()) }
+    @objc private func chooseDesktopVideo() { showPicker(forSpace: activeSpaceKey()) }
+
+    private func showPicker(forSpace space: String?) {
+        pickerPanel?.dismiss()
+        videos = availableVideos()
+        let activeURL = space == nil ? defaultVideoURL : currentVideoURL
+        let view = VideoPickerView(
+            subtitle: space == nil ? "FOR ALL DESKTOPS" : "FOR THIS DESKTOP",
+            sections: pickerSections(),
+            activePath: activeURL?.resolvingSymlinksInPath().path,
+            onPick: { [weak self] url in
+                self?.pickerPanel?.dismiss()
+                self?.selectVideo(url, forSpace: space)
+            },
+            onBrowse: { [weak self] in
+                self?.pickerPanel?.dismiss()
+                self?.chooseVideo(forSpace: space)
+            },
+            onClose: { [weak self] in self?.pickerPanel?.dismiss() }
+        )
+        let panel = VideoPickerPanel(rootView: view)
+        panel.onDismiss = { [weak self, weak panel] in
+            if self?.pickerPanel === panel { self?.pickerPanel = nil }
+        }
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
+        if let frame = screen?.visibleFrame {
+            panel.setFrameOrigin(NSPoint(
+                x: frame.midX - PickerChrome.windowSize.width / 2,
+                y: frame.midY - PickerChrome.windowSize.height / 2
+            ))
+        }
+        pickerPanel = panel
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func pickerSections() -> [PickerSection] {
+        let aerialDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/videos")
+            .standardizedFileURL
+        let bundled = videos.filter { isBundledVideo($0) }
+        let aerials = videos.filter { !isBundledVideo($0) && $0.deletingLastPathComponent().standardizedFileURL == aerialDirectory }
+        let mine = videos.filter { !isBundledVideo($0) && $0.deletingLastPathComponent().standardizedFileURL != aerialDirectory }
+        // A chosen file is stored as a link; skip links that point at a video already listed above.
+        var seen = Set<String>()
+        func items(_ list: [URL]) -> [PickerItem] {
+            list.compactMap { video in
+                guard seen.insert(video.resolvingSymlinksInPath().path).inserted else { return nil }
+                return PickerItem(url: video, title: displayName(for: video))
+            }
+        }
+        let sections = [
+            PickerSection(name: "DEFAULT WALLPAPERS", items: items(bundled)),
+            PickerSection(name: "APPLE AERIALS", items: items(aerials)),
+            PickerSection(name: "YOUR VIDEOS", items: items(mine))
+        ]
+        return sections.filter { !$0.items.isEmpty }
+    }
 
     private func chooseVideo(forSpace space: String?) {
         if let openPanel {
@@ -501,6 +560,271 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = message
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
+    }
+}
+
+// MARK: - Custom video picker
+
+enum PickerChrome {
+    static let accent = Color(red: 47.0 / 255.0, green: 211.0 / 255.0, blue: 200.0 / 255.0)
+    static let highlight = Color(red: 255.0 / 255.0, green: 194.0 / 255.0, blue: 61.0 / 255.0)
+    static let label = Color(white: 0.56)
+    static let chamfer: CGFloat = 12
+    static let windowChamfer: CGFloat = 18
+    static let windowSize = NSSize(width: 780, height: 580)
+
+    static func font(_ size: CGFloat, bold: Bool = false) -> Font {
+        .custom("Menlo", size: size).weight(bold ? .bold : .regular)
+    }
+}
+
+/// Rectangle with the bottom-right corner cut, matching the MetricsWidget tiles.
+struct ChamferedShape: Shape {
+    var chamfer: CGFloat = PickerChrome.chamfer
+
+    func path(in rect: CGRect) -> Path {
+        let cut = min(max(chamfer, 0), min(rect.width, rect.height))
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - cut))
+        path.addLine(to: CGPoint(x: rect.maxX - cut, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct PickerItem: Identifiable {
+    let url: URL
+    let title: String
+    var id: String { url.path }
+}
+
+struct PickerSection: Identifiable {
+    let name: String
+    let items: [PickerItem]
+    var id: String { name }
+}
+
+final class ThumbnailCache {
+    static let shared = ThumbnailCache()
+    private let cache = NSCache<NSString, NSImage>()
+
+    func image(for url: URL) async -> NSImage? {
+        let key = url.resolvingSymlinksInPath().path as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 520, height: 292)
+        do {
+            let duration = try await asset.load(.duration).seconds
+            let seconds = duration.isFinite && duration > 1 ? duration * 0.3 : 0
+            let (cgImage, _) = try await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600))
+            let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            cache.setObject(image, forKey: key)
+            return image
+        } catch {
+            return nil
+        }
+    }
+}
+
+struct PickerTile: View {
+    let item: PickerItem
+    let isActive: Bool
+    let onPick: (URL) -> Void
+    @State private var image: NSImage?
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: { onPick(item.url) }) {
+            VStack(alignment: .leading, spacing: 7) {
+                Color.black.opacity(0.4)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .overlay {
+                        if let image {
+                            Image(nsImage: image).resizable().scaledToFill()
+                        }
+                    }
+                    .clipped()
+                    .overlay(alignment: .topLeading) {
+                        if isActive {
+                            Text("ACTIVE")
+                                .font(PickerChrome.font(9, bold: true))
+                                .foregroundStyle(Color.black)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(PickerChrome.highlight)
+                                .padding(6)
+                        }
+                    }
+                Text(item.title)
+                    .font(PickerChrome.font(11, bold: true))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(8)
+            .background(ChamferedShape().fill(Color.black.opacity(hovering ? 0.34 : 0.22)))
+            .overlay {
+                ChamferedShape()
+                    .stroke(PickerChrome.accent.opacity(hovering ? 1 : (isActive ? 0.7 : 0)), lineWidth: 1.5)
+            }
+            .clipShape(ChamferedShape())
+            .contentShape(ChamferedShape())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .task { image = await ThumbnailCache.shared.image(for: item.url) }
+    }
+}
+
+struct PickerButton: View {
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(PickerChrome.font(11, bold: true))
+                .foregroundStyle(PickerChrome.accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(ChamferedShape(chamfer: 8).fill(Color.black.opacity(hovering ? 0.5 : 0.35)))
+                .overlay(ChamferedShape(chamfer: 8).stroke(PickerChrome.accent.opacity(hovering ? 1 : 0.5), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+struct VideoPickerView: View {
+    let subtitle: String
+    let sections: [PickerSection]
+    let activePath: String?
+    let onPick: (URL) -> Void
+    let onBrowse: () -> Void
+    let onClose: () -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: 12, alignment: .top)]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("CHOOSE VIDEO")
+                        .font(PickerChrome.font(14, bold: true))
+                        .foregroundStyle(Color.white)
+                    Text(subtitle)
+                        .font(PickerChrome.font(10, bold: true))
+                        .foregroundStyle(PickerChrome.label)
+                }
+                Spacer()
+                PickerButton(title: "BROWSE…", action: onBrowse)
+                PickerButton(title: "✕", action: onClose)
+            }
+            .padding(14)
+            .background(Color.black.opacity(0.35))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(sections) { section in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(section.name)
+                                .font(PickerChrome.font(10, bold: true))
+                                .tracking(1.5)
+                                .foregroundStyle(PickerChrome.label)
+                            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                                ForEach(section.items) { item in
+                                    PickerTile(
+                                        item: item,
+                                        isActive: item.url.resolvingSymlinksInPath().path == activePath,
+                                        onPick: onPick
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(14)
+            }
+
+            Text("ESC TO CLOSE  ·  BROWSE… FOR ANY OTHER FILE")
+                .font(PickerChrome.font(9))
+                .foregroundStyle(PickerChrome.label)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.35))
+        }
+    }
+}
+
+final class VideoPickerPanel: NSPanel, NSWindowDelegate {
+    var onDismiss: (() -> Void)?
+    private var dismissed = false
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    init(rootView: VideoPickerView) {
+        let size = PickerChrome.windowSize
+        super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        isMovableByWindowBackground = true
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+        level = .floating
+        collectionBehavior = [.moveToActiveSpace]
+        delegate = self
+
+        let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        effect.material = .underWindowBackground
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+
+        let tint = NSView(frame: effect.bounds)
+        tint.wantsLayer = true
+        tint.autoresizingMask = [.width, .height]
+        tint.layer?.backgroundColor = NSColor(calibratedWhite: 0, alpha: 0.55).cgColor
+        effect.addSubview(tint)
+
+        let hosting = NSHostingView(rootView: rootView)
+        hosting.frame = effect.bounds
+        hosting.autoresizingMask = [.width, .height]
+        effect.addSubview(hosting)
+
+        // Bottom-right chamfer, same cut as the MetricsWidget panels (AppKit origin is bottom-left).
+        let cut = PickerChrome.windowChamfer
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: size.width - cut, y: 0))
+        path.addLine(to: CGPoint(x: size.width, y: cut))
+        path.addLine(to: CGPoint(x: size.width, y: size.height))
+        path.addLine(to: CGPoint(x: 0, y: size.height))
+        path.closeSubpath()
+        let mask = CAShapeLayer()
+        mask.path = path
+        effect.layer?.mask = mask
+
+        contentView = effect
+    }
+
+    func windowDidResignKey(_ notification: Notification) { dismiss() }
+
+    override func cancelOperation(_ sender: Any?) { dismiss() }
+
+    func dismiss() {
+        guard !dismissed else { return }
+        dismissed = true
+        close()
+        onDismiss?()
     }
 }
 

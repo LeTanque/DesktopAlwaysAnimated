@@ -29,6 +29,7 @@ swiftc "$project_dir/NativeAerialLooper.swift" \
   -framework AVFoundation \
   -framework AVKit \
   -framework CoreGraphics \
+  -framework SwiftUI \
   -o "$app_dir/Contents/MacOS/NativeAerialLooper"
 
 cp "$project_dir/Info.plist" "$app_dir/Contents/Info.plist"
