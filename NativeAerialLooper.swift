@@ -134,8 +134,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sourceMenuItem = menu.addItem(withTitle: "No background selected", action: nil, keyEquivalent: "")
         sourceMenuItem.isEnabled = false
         menu.addItem(.separator())
-        let choose = menu.addItem(withTitle: "Choose Background Video…", action: #selector(chooseBackgroundVideo), keyEquivalent: "o")
+        let choose = menu.addItem(withTitle: "Choose Video for All Desktops…", action: #selector(chooseBackgroundVideo), keyEquivalent: "o")
         choose.target = self
+        let chooseDesktop = menu.addItem(withTitle: "Choose Video for This Desktop…", action: #selector(chooseDesktopVideo), keyEquivalent: "")
+        chooseDesktop.target = self
         let restart = menu.addItem(withTitle: "Restart Video Wallpaper", action: #selector(restartVideoWallpaper), keyEquivalent: "r")
         restart.target = self
         playbackMenuItem = menu.addItem(withTitle: "Pause", action: #selector(togglePlayback), keyEquivalent: "p")
@@ -205,13 +207,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func chooseBackgroundVideo() { chooseVideo(forSpace: nil) }
 
+    @objc private func chooseDesktopVideo() { chooseVideo(forSpace: activeSpaceKey()) }
+
     private func chooseVideo(forSpace space: String?) {
         if let openPanel {
             openPanel.makeKeyAndOrderFront(nil)
             return
         }
         let panel = NSOpenPanel()
-        panel.title = space == nil ? "Choose Background Video" : "Choose Video for This Desktop"
+        panel.title = space == nil ? "Choose Video for All Desktops" : "Choose Video for This Desktop"
         panel.message = "Choose a local video that macOS can play, such as MOV, MP4, or M4V."
         panel.prompt = "Use Video"
         panel.canChooseFiles = true
