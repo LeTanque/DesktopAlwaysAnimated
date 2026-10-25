@@ -1027,7 +1027,7 @@ final class VideoPickerPanel: NSPanel, NSWindowDelegate {
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         level = .floating
-        collectionBehavior = [.moveToActiveSpace]
+        collectionBehavior = [.canJoinAllSpaces]
         minSize = PickerChrome.minimumSize
         delegate = self
 
@@ -1054,7 +1054,34 @@ final class VideoPickerPanel: NSPanel, NSWindowDelegate {
         // file chooser keep the app active, so they leave it open.
         deactivationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.dismiss() }
+        ) { [weak self] _ in self?.appDidResignActive() }
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.lastSpaceChange = Date() }
+        // If activation after a Space switch doesn't stick, the app is inactive and no resign event
+        // will fire, so a click anywhere outside the picker (reported to global monitors) closes it.
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.dismiss()
+        }
+    }
+
+    private var clickMonitor: Any?
+
+    // Switching desktops also deactivates the app, which must not close the picker. The panel joins
+    // every Space, so it follows the user; we only wait briefly to tell a switch from a real click away.
+    private var spaceObserver: NSObjectProtocol?
+    private var lastSpaceChange = Date.distantPast
+
+    private func appDidResignActive() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, !self.dismissed, !NSApp.isActive else { return }
+            if Date().timeIntervalSince(self.lastSpaceChange) < 0.8 {
+                NSApp.activate(ignoringOtherApps: true)
+                self.makeKeyAndOrderFront(nil)
+            } else {
+                self.dismiss()
+            }
+        }
     }
 
     func windowDidResize(_ notification: Notification) { PickerChrome.remember(size: frame.size) }
@@ -1066,6 +1093,10 @@ final class VideoPickerPanel: NSPanel, NSWindowDelegate {
         dismissed = true
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }
         deactivationObserver = nil
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
+        spaceObserver = nil
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        clickMonitor = nil
         close()
         onDismiss?()
     }
