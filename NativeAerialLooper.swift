@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 typealias CGSConnectionID = UInt32
 @_silgen_name("CGSMainConnectionID") private func CGSMainConnectionID() -> CGSConnectionID
 @_silgen_name("CGSGetActiveSpace") private func CGSGetActiveSpace(_ connection: CGSConnectionID) -> UInt64
+@_silgen_name("CGSCopyManagedDisplaySpaces") private func CGSCopyManagedDisplaySpaces(_ connection: CGSConnectionID) -> CFArray?
 
 final class AerialWindowController {
     private let screen: NSScreen
@@ -113,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var videoLoadTask: Task<Void, Never>?
     private var openPanel: NSOpenPanel?
     private var pickerPanel: VideoPickerPanel?
+    private let pickerModel = PickerModel()
     private var videos: [URL] = []
     private var profiles: [String: String] = UserDefaults.standard.dictionary(forKey: "spaceProfiles") as? [String: String] ?? [:]
     private lazy var aerialNames = loadAerialNames()
@@ -135,10 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sourceMenuItem = menu.addItem(withTitle: "No background selected", action: nil, keyEquivalent: "")
         sourceMenuItem.isEnabled = false
         menu.addItem(.separator())
-        let choose = menu.addItem(withTitle: "Choose Video for All Desktops…", action: #selector(chooseBackgroundVideo), keyEquivalent: "o")
-        choose.target = self
-        let chooseDesktop = menu.addItem(withTitle: "Choose Video for This Desktop…", action: #selector(chooseDesktopVideo), keyEquivalent: "")
-        chooseDesktop.target = self
+        let configuration = menu.addItem(withTitle: "Configuration…", action: #selector(showConfiguration), keyEquivalent: "o")
+        configuration.target = self
         let restart = menu.addItem(withTitle: "Restart Video Wallpaper", action: #selector(restartVideoWallpaper), keyEquivalent: "r")
         restart.target = self
         playbackMenuItem = menu.addItem(withTitle: "Pause", action: #selector(togglePlayback), keyEquivalent: "p")
@@ -202,42 +202,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() { NSApp.terminate(nil) }
 
-    @objc private func chooseBackgroundVideo() { showPicker(forSpace: nil) }
-
-    @objc private func chooseDesktopVideo() { showPicker(forSpace: activeSpaceKey()) }
-
-    private func showPicker(forSpace space: String?) {
+    @objc private func showConfiguration() {
         pickerPanel?.dismiss()
-        videos = availableVideos()
-        let activeURL = space == nil ? defaultVideoURL : currentVideoURL
+        refreshPickerModel()
         let view = VideoPickerView(
-            subtitle: space == nil ? "FOR ALL DESKTOPS" : "FOR THIS DESKTOP",
-            sections: pickerSections(),
-            activePath: activeURL?.resolvingSymlinksInPath().path,
-            onPick: { [weak self] url in
-                self?.pickerPanel?.dismiss()
-                self?.selectVideo(url, forSpace: space)
-            },
-            onBrowse: { [weak self] in
-                self?.pickerPanel?.dismiss()
-                self?.chooseVideo(forSpace: space)
-            },
-            onClose: { [weak self] in self?.pickerPanel?.dismiss() }
+            model: pickerModel,
+            onPick: { [weak self] url in self?.showAssignMenu(for: url) },
+            onBrowse: { [weak self] in self?.browseForVideo() },
+            onDone: { [weak self] in self?.pickerPanel?.dismiss() }
         )
-        let panel = VideoPickerPanel(rootView: view)
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let size = PickerChrome.initialSize(in: visible)
+        let panel = VideoPickerPanel(rootView: view, size: size)
         panel.onDismiss = { [weak self, weak panel] in
             if self?.pickerPanel === panel { self?.pickerPanel = nil }
         }
-        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
-        if let frame = screen?.visibleFrame {
-            panel.setFrameOrigin(NSPoint(
-                x: frame.midX - PickerChrome.windowSize.width / 2,
-                y: frame.midY - PickerChrome.windowSize.height / 2
-            ))
-        }
+        panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2))
         pickerPanel = panel
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: Assignment model
+    //
+    // `defaultVideoURL` is the All Desktops video and `profiles` holds per-Desktop videos. A Desktop's own
+    // video always wins; All Desktops fills the rest; with neither, the app shows nothing and macOS's own
+    // wallpaper is visible.
+
+    private func resolvedPath(_ url: URL) -> String { url.resolvingSymlinksInPath().path }
+
+    /// Live Space IDs (all kinds) and the Mission Control number of each regular Desktop.
+    private func spaceLayout() -> (ids: Set<String>, numbers: [String: Int]) {
+        var ids = Set<String>()
+        var numbers: [String: Int] = [:]
+        let displays = CGSCopyManagedDisplaySpaces(CGSMainConnectionID()) as? [[String: Any]] ?? []
+        for display in displays {
+            var number = 0
+            for space in display["Spaces"] as? [[String: Any]] ?? [] {
+                guard let id = (space["ManagedSpaceID"] as? NSNumber)?.stringValue else { continue }
+                ids.insert(id)
+                if (space["type"] as? NSNumber)?.intValue == 0 {
+                    number += 1
+                    numbers[id] = number
+                }
+            }
+        }
+        return (ids, numbers)
+    }
+
+    /// Per-Desktop assignments that point at Desktops that still exist.
+    private func liveProfileCount() -> Int {
+        let ids = spaceLayout().ids
+        return ids.isEmpty ? profiles.count : profiles.keys.filter { ids.contains($0) }.count
+    }
+
+    private func refreshPickerModel() {
+        videos = availableVideos()
+        let layout = spaceLayout()
+        var byVideo: [String: [Int]] = [:]
+        for (space, path) in profiles {
+            guard let number = layout.numbers[space] else { continue }
+            byVideo[resolvedPath(URL(fileURLWithPath: path)), default: []].append(number)
+        }
+        pickerModel.sections = pickerSections()
+        pickerModel.allPath = defaultVideoURL.map(resolvedPath)
+        pickerModel.desktopNumbers = byVideo.mapValues { $0.sorted() }
+        pickerModel.activeDesktop = layout.numbers[activeSpaceKey()]
     }
 
     private func pickerSections() -> [PickerSection] {
@@ -263,15 +294,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return sections.filter { !$0.items.isEmpty }
     }
 
-    private func chooseVideo(forSpace space: String?) {
+    /// Small menu shown when a tile is clicked. Choosing an entry never closes the picker.
+    private func showAssignMenu(for url: URL) {
+        let path = resolvedPath(url)
+        let thisDesktop = profiles[activeSpaceKey()].map { resolvedPath(URL(fileURLWithPath: $0)) } == path
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let all = menu.addItem(withTitle: "All Desktops", action: #selector(toggleAllDesktopsItem(_:)), keyEquivalent: "")
+        all.target = self
+        all.representedObject = url
+        all.state = pickerModel.allPath == path ? .on : .off
+        let this = menu.addItem(withTitle: "This Desktop", action: #selector(toggleThisDesktopItem(_:)), keyEquivalent: "")
+        this.target = self
+        this.representedObject = url
+        this.state = thisDesktop ? .on : .off
+        if let event = NSApp.currentEvent, let view = pickerPanel?.contentView {
+            NSMenu.popUpContextMenu(menu, with: event, for: view)
+        } else {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
+    }
+
+    @objc private func toggleAllDesktopsItem(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        toggleAllDesktops(url)
+    }
+
+    @objc private func toggleThisDesktopItem(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        toggleThisDesktop(url)
+    }
+
+    private func toggleAllDesktops(_ url: URL) {
+        if let current = defaultVideoURL, resolvedPath(current) == resolvedPath(url) {
+            // Unchecking All Desktops: Desktops without their own video go back to the macOS wallpaper.
+            defaultVideoURL = nil
+            UserDefaults.standard.removeObject(forKey: "selectedVideoPath")
+            applyProfileForActiveSpace()
+            refreshPickerModel()
+            return
+        }
+        let overrideEverything = liveProfileCount() > 0 && confirmOverrideAll(for: url)
+        loadVideo(url) { [weak self] in
+            guard let self, let managedURL = self.managedLink(for: url) else { return }
+            self.defaultVideoURL = managedURL
+            UserDefaults.standard.set(managedURL.path, forKey: "selectedVideoPath")
+            if overrideEverything {
+                self.profiles.removeAll()
+                UserDefaults.standard.set(self.profiles, forKey: "spaceProfiles")
+            }
+            self.applyProfileForActiveSpace()
+            self.refreshPickerModel()
+        }
+    }
+
+    private func toggleThisDesktop(_ url: URL) {
+        let key = activeSpaceKey()
+        if let assigned = profiles[key], resolvedPath(URL(fileURLWithPath: assigned)) == resolvedPath(url) {
+            profiles.removeValue(forKey: key)
+            UserDefaults.standard.set(profiles, forKey: "spaceProfiles")
+            applyProfileForActiveSpace()
+            refreshPickerModel()
+            return
+        }
+        loadVideo(url) { [weak self] in
+            guard let self, let managedURL = self.managedLink(for: url) else { return }
+            self.profiles[key] = managedURL.path
+            UserDefaults.standard.set(self.profiles, forKey: "spaceProfiles")
+            self.applyProfileForActiveSpace()
+            self.refreshPickerModel()
+        }
+    }
+
+    private func managedLink(for url: URL) -> URL? {
+        guard let managedURL = try? linkVideo(url) else {
+            showError("Native Aerial Looper could not create a managed link for “\(url.lastPathComponent)”.\n\nCheck that the file is still available and that the app can write to its Application Support folder.")
+            return nil
+        }
+        return managedURL
+    }
+
+    private func confirmOverrideAll(for url: URL) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Override all backgrounds?"
+        alert.informativeText = "Some Desktops already have their own video.\n\nYes removes those so “\(displayName(for: url))” plays on every Desktop. No keeps them and plays it only on Desktops without their own."
+        alert.addButton(withTitle: "Yes")
+        alert.addButton(withTitle: "No")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// BROWSE… adds a file to the picker's Your Videos section; assigning it is a separate click.
+    private func browseForVideo() {
         if let openPanel {
             openPanel.makeKeyAndOrderFront(nil)
             return
         }
+        pickerPanel?.dismiss()
         let panel = NSOpenPanel()
-        panel.title = space == nil ? "Choose Video for All Desktops" : "Choose Video for This Desktop"
+        panel.title = "Add Video"
         panel.message = "Choose a local video that macOS can play, such as MOV, MP4, or M4V."
-        panel.prompt = "Use Video"
+        panel.prompt = "Add Video"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -284,30 +407,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.begin { [weak self] response in
             guard let self else { return }
             self.openPanel = nil
-            guard response == .OK, let url = panel.url else { return }
-            self.selectVideo(url, forSpace: space)
-        }
-    }
-
-    private func selectVideo(_ url: URL, forSpace space: String?) {
-        loadVideo(url) { [weak self] in
-            guard let self else { return }
-            guard let managedURL = try? self.linkVideo(url) else {
-                self.showError("Native Aerial Looper could not create a managed link for “\(url.lastPathComponent)”.\n\nCheck that the file is still available and that the app can write to its Application Support folder.")
+            guard response == .OK, let url = panel.url else {
+                self.showConfiguration()
                 return
             }
-            self.videos = self.availableVideos()
-            if let space {
-                self.profiles[space] = managedURL.path
-            } else {
-                self.defaultVideoURL = managedURL
-                UserDefaults.standard.set(managedURL.path, forKey: "selectedVideoPath")
-                // "All Desktops" means all of them: drop every per-Desktop assignment so the new
-                // default shows everywhere, including Desktops that had their own video.
-                self.profiles.removeAll()
+            self.loadVideo(url, onFailure: { [weak self] in self?.showConfiguration() }) { [weak self] in
+                guard let self else { return }
+                _ = self.managedLink(for: url)
+                self.showConfiguration()
             }
-            UserDefaults.standard.set(self.profiles, forKey: "spaceProfiles")
-            self.applyProfileForActiveSpace()
         }
     }
 
@@ -317,14 +425,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyProfileForActiveSpace()
     }
 
-    @objc private func spaceDidChange() { applyProfileForActiveSpace() }
+    @objc private func spaceDidChange() {
+        applyProfileForActiveSpace()
+        if pickerPanel != nil { refreshPickerModel() }
+    }
 
     private func activeSpaceKey() -> String { String(CGSGetActiveSpace(CGSMainConnectionID())) }
 
     private func applyProfileForActiveSpace() {
         let profileURL = profiles[activeSpaceKey()].map { URL(fileURLWithPath: $0) }
         guard let url = profileURL ?? defaultVideoURL else {
-            chooseBackgroundVideo()
+            hideWallpaper()
             return
         }
         loadVideo(url, onFailure: { [weak self] in
@@ -332,9 +443,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if profileURL != nil, let fallback = self.defaultVideoURL, fallback != url {
                 self.loadVideo(fallback) { self.showVideo(fallback) }
             } else if self.controllers.isEmpty {
-                self.chooseBackgroundVideo()
+                self.showConfiguration()
             }
         }) { [weak self] in self?.showVideo(url) }
+    }
+
+    /// No video applies to this Desktop: take our windows away so the macOS wallpaper shows.
+    private func hideWallpaper() {
+        videoLoadTask?.cancel()
+        controllers.forEach { $0.close() }
+        controllers.removeAll()
+        currentVideoURL = nil
+        sourceMenuItem.title = "Showing the macOS wallpaper"
+        sourceMenuItem.toolTip = nil
+        playbackMenuItem.title = "Pause"
+        playbackMenuItem.isEnabled = false
     }
 
     private func loadVideo(_ url: URL, onFailure: (() -> Void)? = nil, onSuccess: @escaping () -> Void) {
@@ -358,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let onFailure {
                     onFailure()
                 } else if self.controllers.isEmpty {
-                    self.chooseBackgroundVideo()
+                    self.showConfiguration()
                 }
             }
         }
@@ -423,15 +546,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let index = args.firstIndex(of: "--video"), args.indices.contains(index + 1) {
             return URL(fileURLWithPath: args[index + 1])
         }
-        if let path = UserDefaults.standard.string(forKey: "selectedVideoPath") {
+        let defaults = UserDefaults.standard
+        if let path = defaults.string(forKey: "selectedVideoPath") {
+            defaults.set(true, forKey: "didInitialSetup")
             return URL(fileURLWithPath: path)
         }
-        // macOS stores downloaded Aerials under the user's wallpaper cache.
-        // The logical URL in com.apple.wallpaper can refer to an asset that isn't
-        // directly present in /System/Library, so choose the most recently
-        // downloaded local Aerial when no explicit --video path was supplied.
-        let videos = availableVideos()
-        return videos.first(where: { !isBundledVideo($0) }) ?? videos.first
+        // First launch only: play a random bundled wallpaper on All Desktops. After that, no saved
+        // video means the user removed it on purpose, so it is not chosen again.
+        guard !defaults.bool(forKey: "didInitialSetup") else { return nil }
+        defaults.set(true, forKey: "didInitialSetup")
+        let all = availableVideos()
+        guard let pick = all.filter(isBundledVideo).randomElement() ?? all.first,
+              let managedURL = try? linkVideo(pick)
+        else { return nil }
+        defaults.set(managedURL.path, forKey: "selectedVideoPath")
+        return managedURL
     }
 
     private func availableVideos() -> [URL] {
@@ -500,7 +629,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func displayName(for video: URL) -> String {
-        let stem = video.deletingPathExtension().lastPathComponent
+        // A managed link ("Name (2).mp4") is named after what it points at.
+        let stem = video.resolvingSymlinksInPath().deletingPathExtension().lastPathComponent
         if let bundledName = bundledWallpaperNames[stem] { return bundledName }
         let identifier = stem.uppercased()
         return aerialNames[identifier] ?? stem
@@ -550,10 +680,41 @@ enum PickerChrome {
     static let label = Color(white: 0.56)
     static let chamfer: CGFloat = 12
     static let windowChamfer: CGFloat = 18
-    static let windowSize = NSSize(width: 780, height: 580)
+    static let minimumSize = NSSize(width: 600, height: 440)
+    private static let sizeKey = "pickerSize"
+
+    /// Last size the user resized to, else a large default scaled to the screen.
+    static func initialSize(in visible: NSRect) -> NSSize {
+        var size = NSSize(
+            width: min(max(visible.width * 0.72, 960), 1280),
+            height: min(max(visible.height * 0.78, 680), 880)
+        )
+        if let saved = UserDefaults.standard.string(forKey: sizeKey) {
+            let restored = NSSizeFromString(saved)
+            if restored.width > 0, restored.height > 0 { size = restored }
+        }
+        size.width = min(max(size.width, minimumSize.width), visible.width)
+        size.height = min(max(size.height, minimumSize.height), visible.height)
+        return size
+    }
+
+    static func remember(size: NSSize) {
+        UserDefaults.standard.set(NSStringFromSize(size), forKey: sizeKey)
+    }
 
     static func font(_ size: CGFloat, bold: Bool = false) -> Font {
         .custom("Menlo", size: size).weight(bold ? .bold : .regular)
+    }
+}
+
+/// "Desktop 2", "Desktop 2 and 4", "Desktop 2, 4, and 5".
+func assignmentLabel(forDesktops numbers: [Int]) -> String {
+    let list = numbers.map(String.init)
+    switch list.count {
+    case 0: return ""
+    case 1: return "Desktop \(list[0])"
+    case 2: return "Desktop \(list[0]) and \(list[1])"
+    default: return "Desktop \(list.dropLast().joined(separator: ", ")), and \(list[list.count - 1])"
     }
 }
 
@@ -577,13 +738,34 @@ struct ChamferedShape: Shape {
 struct PickerItem: Identifiable {
     let url: URL
     let title: String
+    let resolvedPath: String
     var id: String { url.path }
+
+    init(url: URL, title: String) {
+        self.url = url
+        self.title = title
+        self.resolvedPath = url.resolvingSymlinksInPath().path
+    }
 }
 
 struct PickerSection: Identifiable {
     let name: String
     let items: [PickerItem]
     var id: String { name }
+}
+
+/// What the picker shows: videos plus where each one is assigned. Updated live by the app.
+final class PickerModel: ObservableObject {
+    @Published var sections: [PickerSection] = []
+    @Published var allPath: String?
+    @Published var desktopNumbers: [String: [Int]] = [:]
+    @Published var activeDesktop: Int?
+}
+
+struct AssignmentBadge: Identifiable {
+    let text: String
+    let isAll: Bool
+    var id: String { text }
 }
 
 final class ThumbnailCache {
@@ -610,12 +792,46 @@ final class ThumbnailCache {
     }
 }
 
+/// Muted, looping preview that plays while the pointer rests on a tile.
+final class PreviewPlayerView: NSView {
+    private let player = AVQueuePlayer()
+    private var looper: AVPlayerLooper?
+
+    init(url: URL) {
+        super.init(frame: .zero)
+        let playerLayer = AVPlayerLayer(player: player)
+        playerLayer.videoGravity = .resizeAspectFill
+        layer = playerLayer
+        wantsLayer = true
+        player.isMuted = true
+        looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
+        player.play()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func stop() {
+        player.pause()
+        looper?.disableLooping()
+        player.removeAllItems()
+    }
+}
+
+struct LoopingPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> PreviewPlayerView { PreviewPlayerView(url: url) }
+    func updateNSView(_ view: PreviewPlayerView, context: Context) {}
+    static func dismantleNSView(_ view: PreviewPlayerView, coordinator: ()) { view.stop() }
+}
+
 struct PickerTile: View {
     let item: PickerItem
-    let isActive: Bool
+    let badges: [AssignmentBadge]
     let onPick: (URL) -> Void
     @State private var image: NSImage?
     @State private var hovering = false
+    @State private var previewing = false
 
     var body: some View {
         Button(action: { onPick(item.url) }) {
@@ -627,17 +843,25 @@ struct PickerTile: View {
                             Image(nsImage: image).resizable().scaledToFill()
                         }
                     }
+                    .overlay {
+                        if previewing {
+                            LoopingPreview(url: item.url).allowsHitTesting(false)
+                        }
+                    }
                     .clipped()
                     .overlay(alignment: .topLeading) {
-                        if isActive {
-                            Text("ACTIVE")
-                                .font(PickerChrome.font(9, bold: true))
-                                .foregroundStyle(Color.black)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(PickerChrome.highlight)
-                                .padding(6)
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(badges) { badge in
+                                Text(badge.text)
+                                    .font(PickerChrome.font(9, bold: true))
+                                    .foregroundStyle(Color.black)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(badge.isAll ? PickerChrome.accent : PickerChrome.highlight)
+                            }
                         }
+                        .padding(6)
                     }
                 Text(item.title)
                     .font(PickerChrome.font(11, bold: true))
@@ -649,17 +873,26 @@ struct PickerTile: View {
             .background(ChamferedShape().fill(Color.black.opacity(hovering ? 0.34 : 0.22)))
             .overlay {
                 ChamferedShape()
-                    .stroke(PickerChrome.accent.opacity(hovering ? 1 : (isActive ? 0.7 : 0)), lineWidth: 1.5)
+                    .stroke(PickerChrome.accent.opacity(hovering ? 1 : (badges.isEmpty ? 0 : 0.45)), lineWidth: 1.5)
             }
             .clipShape(ChamferedShape())
             .contentShape(ChamferedShape())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .task(id: hovering) {
+            if hovering {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if !Task.isCancelled { previewing = true }
+            } else {
+                previewing = false
+            }
+        }
         .task { image = await ThumbnailCache.shared.image(for: item.url) }
     }
 }
 
+/// Square-cornered button; only the window and tiles carry the chamfer.
 struct PickerButton: View {
     let title: String
     let action: () -> Void
@@ -672,8 +905,9 @@ struct PickerButton: View {
                 .foregroundStyle(PickerChrome.accent)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(ChamferedShape(chamfer: 8).fill(Color.black.opacity(hovering ? 0.5 : 0.35)))
-                .overlay(ChamferedShape(chamfer: 8).stroke(PickerChrome.accent.opacity(hovering ? 1 : 0.5), lineWidth: 1))
+                .background(Rectangle().fill(Color.black.opacity(hovering ? 0.5 : 0.35)))
+                .overlay(Rectangle().stroke(PickerChrome.accent.opacity(hovering ? 1 : 0.5), lineWidth: 1))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -681,20 +915,35 @@ struct PickerButton: View {
 }
 
 struct VideoPickerView: View {
-    let subtitle: String
-    let sections: [PickerSection]
-    let activePath: String?
+    @ObservedObject var model: PickerModel
     let onPick: (URL) -> Void
     let onBrowse: () -> Void
-    let onClose: () -> Void
+    let onDone: () -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: 12, alignment: .top)]
+    private let columns = [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12, alignment: .top)]
+
+    private var subtitle: String {
+        var text = "CLICK A BACKGROUND TO ASSIGN IT"
+        if let desktop = model.activeDesktop { text += "  ·  YOU ARE ON DESKTOP \(desktop)" }
+        return text
+    }
+
+    private func badges(for item: PickerItem) -> [AssignmentBadge] {
+        var result: [AssignmentBadge] = []
+        if model.allPath == item.resolvedPath {
+            result.append(AssignmentBadge(text: "ALL DESKTOPS", isAll: true))
+        }
+        if let numbers = model.desktopNumbers[item.resolvedPath], !numbers.isEmpty {
+            result.append(AssignmentBadge(text: assignmentLabel(forDesktops: numbers).uppercased(), isAll: false))
+        }
+        return result
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("CHOOSE VIDEO")
+                    Text("CONFIGURATION")
                         .font(PickerChrome.font(14, bold: true))
                         .foregroundStyle(Color.white)
                     Text(subtitle)
@@ -703,14 +952,13 @@ struct VideoPickerView: View {
                 }
                 Spacer()
                 PickerButton(title: "BROWSE…", action: onBrowse)
-                PickerButton(title: "✕", action: onClose)
             }
             .padding(14)
             .background(Color.black.opacity(0.35))
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    ForEach(sections) { section in
+                    ForEach(model.sections) { section in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(section.name)
                                 .font(PickerChrome.font(10, bold: true))
@@ -718,11 +966,7 @@ struct VideoPickerView: View {
                                 .foregroundStyle(PickerChrome.label)
                             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                                 ForEach(section.items) { item in
-                                    PickerTile(
-                                        item: item,
-                                        isActive: item.url.resolvingSymlinksInPath().path == activePath,
-                                        onPick: onPick
-                                    )
+                                    PickerTile(item: item, badges: badges(for: item), onPick: onPick)
                                 }
                             }
                         }
@@ -731,27 +975,51 @@ struct VideoPickerView: View {
                 .padding(14)
             }
 
-            Text("ESC TO CLOSE  ·  BROWSE… FOR ANY OTHER FILE")
-                .font(PickerChrome.font(9))
-                .foregroundStyle(PickerChrome.label)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.35))
+            HStack {
+                Text("ESC OR CLICK OUTSIDE TO CLOSE  ·  BROWSE… ADDS ANY OTHER FILE")
+                    .font(PickerChrome.font(9))
+                    .foregroundStyle(PickerChrome.label)
+                Spacer()
+                PickerButton(title: "DONE", action: onDone)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.35))
         }
+    }
+}
+
+/// Blurred backdrop whose bottom-right corner is cut; the cut is rebuilt whenever the window resizes.
+final class ChamferedEffectView: NSVisualEffectView {
+    override func layout() {
+        super.layout()
+        let cut = PickerChrome.windowChamfer
+        let width = bounds.width
+        let height = bounds.height
+        // AppKit origin is bottom-left.
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: width - cut, y: 0))
+        path.addLine(to: CGPoint(x: width, y: cut))
+        path.addLine(to: CGPoint(x: width, y: height))
+        path.addLine(to: CGPoint(x: 0, y: height))
+        path.closeSubpath()
+        let mask = CAShapeLayer()
+        mask.path = path
+        layer?.mask = mask
     }
 }
 
 final class VideoPickerPanel: NSPanel, NSWindowDelegate {
     var onDismiss: (() -> Void)?
     private var dismissed = false
+    private var deactivationObserver: NSObjectProtocol?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    init(rootView: VideoPickerView) {
-        let size = PickerChrome.windowSize
-        super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+    init(rootView: VideoPickerView, size: NSSize) {
+        super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -760,9 +1028,10 @@ final class VideoPickerPanel: NSPanel, NSWindowDelegate {
         hidesOnDeactivate = false
         level = .floating
         collectionBehavior = [.moveToActiveSpace]
+        minSize = PickerChrome.minimumSize
         delegate = self
 
-        let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        let effect = ChamferedEffectView(frame: NSRect(origin: .zero, size: size))
         effect.material = .underWindowBackground
         effect.blendingMode = .behindWindow
         effect.state = .active
@@ -779,29 +1048,24 @@ final class VideoPickerPanel: NSPanel, NSWindowDelegate {
         hosting.autoresizingMask = [.width, .height]
         effect.addSubview(hosting)
 
-        // Bottom-right chamfer, same cut as the MetricsWidget panels (AppKit origin is bottom-left).
-        let cut = PickerChrome.windowChamfer
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: 0))
-        path.addLine(to: CGPoint(x: size.width - cut, y: 0))
-        path.addLine(to: CGPoint(x: size.width, y: cut))
-        path.addLine(to: CGPoint(x: size.width, y: size.height))
-        path.addLine(to: CGPoint(x: 0, y: size.height))
-        path.closeSubpath()
-        let mask = CAShapeLayer()
-        mask.path = path
-        effect.layer?.mask = mask
-
         contentView = effect
+
+        // Clicking anywhere outside the app closes the picker. Menus, the override prompt, and the
+        // file chooser keep the app active, so they leave it open.
+        deactivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.dismiss() }
     }
 
-    func windowDidResignKey(_ notification: Notification) { dismiss() }
+    func windowDidResize(_ notification: Notification) { PickerChrome.remember(size: frame.size) }
 
     override func cancelOperation(_ sender: Any?) { dismiss() }
 
     func dismiss() {
         guard !dismissed else { return }
         dismissed = true
+        if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }
+        deactivationObserver = nil
         close()
         onDismiss?()
     }
